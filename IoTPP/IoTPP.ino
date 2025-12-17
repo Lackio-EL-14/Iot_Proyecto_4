@@ -7,8 +7,8 @@
 
 #define THINGNAME "Object_PP"
 
-const char WIFI_SSID[] = "Flia LAMAS";
-const char WIFI_PASSWORD[] = "kf142004";
+String wifi_ssid = "";
+String wifi_password = "";
 const char AWS_IOT_ENDPOINT[] = "a1fmgwdlekclx6-ats.iot.us-east-2.amazonaws.com";
 
 // Topics
@@ -16,12 +16,14 @@ const char AWS_IOT_ENDPOINT[] = "a1fmgwdlekclx6-ats.iot.us-east-2.amazonaws.com"
 #define AWS_IOT_SHADOW_UPDATE_DELTA "$aws/things/Object_PP/shadow/update/delta"
 #define AWS_IOT_SHADOW_UPDATE_ACCEPTED "$aws/things/Object_PP/shadow/update/accepted"
 #define AWS_IOT_SHADOW_UPDATE_REJECTED "$aws/things/Object_PP/shadow/update/rejected"
+#define AWS_IOT_SHADOW_GET "$aws/things/Object_PP/shadow/get"
+#define AWS_IOT_SHADOW_GET_ACCEPTED "$aws/things/Object_PP/shadow/get/accepted"
 #define AWS_IOT_SUBSCRIBE_TOPIC "esp32/sub"
 #define AWS_IOT_PUBLISH_TOPIC "esp32/sensor"
 
 // Pines
-const int SERVO1_PIN = 32;    // Servo 1
-const int SERVO2_PIN = 25;    // Servo 2 
+const int SERVO1_PIN = 25;    // Servo 1
+const int SERVO2_PIN = 32;    // Servo 2 
 const int PIR_SENSOR_PIN = 27; // Sensor movimiento HC-SR501
 const int IR_SENSOR_PIN = 26;  // Sensor infrarrojo
 
@@ -115,7 +117,7 @@ protected:
     const long debounceTime;
 
 public:
-    BaseSensor(int sensorPin, long readInt = 1000, long debounce = 4000) 
+    BaseSensor(int sensorPin, long readInt = 1000, long debounce = 1500) 
         : pin(sensorPin), currentState(false), lastState(false),
           lastDetectionTime(0), lastStateChangeTime(0), lastReadTime(0),
           readInterval(readInt), debounceTime(debounce) {}
@@ -130,38 +132,36 @@ public:
 
 class PIRSensor : public BaseSensor {
 public:
-    PIRSensor(int sensorPin) : BaseSensor(sensorPin, 1000, 4000) {}
+    PIRSensor(int sensorPin) : BaseSensor(sensorPin, 500, 1500) {}
     
     void begin() override {
         pinMode(pin, INPUT);
-        Serial.println("✅ Sensor PIR HC-SR501 inicializado (GPIO " + String(pin) + ")");
+        Serial.println(" Sensor PIR HC-SR501 inicializado (GPIO " + String(pin) + ")");
     }
     
     void update() override {
         unsigned long now = millis();
-        if (now - lastReadTime < readInterval) return; // No leer antes del intervalo
+        if (now - lastReadTime < readInterval) return; 
         lastReadTime = now;
 
         bool reading = digitalRead(pin) == HIGH;
         bool stateChanged = false;
 
         if (reading && !currentState) {
-            // Movimiento detectado
             if (now - lastStateChangeTime >= debounceTime) {
                 currentState = true;
                 lastDetectionTime = now;
                 lastStateChangeTime = now;
                 stateChanged = true;
-                Serial.println("🚨 ¡MOVIMIENTO PIR DETECTADO!");
+                Serial.println(" ¡MOVIMIENTO PIR DETECTADO!");
             }
         } 
         else if (!reading && currentState) {
-            // Movimiento desapareció
             if (now - lastStateChangeTime >= debounceTime) {
                 currentState = false;
                 lastStateChangeTime = now;
                 stateChanged = true;
-                Serial.println("✅ PIR: Sin movimiento");
+                Serial.println(" PIR: Sin movimiento");
             }
         }
 
@@ -175,16 +175,16 @@ public:
 
 class IRSensor : public BaseSensor {
 public:
-    IRSensor(int sensorPin) : BaseSensor(sensorPin, 1000, 3000) {}
+    IRSensor(int sensorPin) : BaseSensor(sensorPin, 500, 1500) {}
     
     void begin() override {
         pinMode(pin, INPUT);
-        Serial.println("✅ Sensor Infrarrojo inicializado (GPIO " + String(pin) + ")");
+        Serial.println(" Sensor Infrarrojo inicializado (GPIO " + String(pin) + ")");
     }
     
     void update() override {
         unsigned long now = millis();
-        if (now - lastReadTime < readInterval) return; // No leer antes del intervalo
+        if (now - lastReadTime < readInterval) return; 
         lastReadTime = now;
 
         bool reading = digitalRead(pin) == LOW; 
@@ -204,7 +204,7 @@ public:
                 currentState = false;
                 lastStateChangeTime = now;
                 stateChanged = true;
-                Serial.println("✅ IR: Sin objeto");
+                Serial.println(" IR: Sin objeto");
             }
         }
 
@@ -227,48 +227,52 @@ private:
 
 public:
     DualServoController(int servoPin1, int servoPin2) 
-        : pin1(servoPin1), pin2(servoPin2), currentAngle1(0), currentAngle2(0) {}
+        : pin1(servoPin1), pin2(servoPin2), currentAngle1(0), currentAngle2(90) {} // Inician cerrados (0 y 90)
     
     void begin() {
         servo1.attach(pin1);
         servo2.attach(pin2);
-        servo1.write(0);
-        servo2.write(0);
-        currentAngle1 = 0;
-        currentAngle2 = 0;
-        Serial.println("✅ Servo 1 inicializado (GPIO " + String(pin1) + ")");
-        Serial.println("✅ Servo 2 inicializado (GPIO " + String(pin2) + ")");
+        close(); 
+        Serial.println(" Servos inicializados en modo ESPEJO (0-90°)");
     }
     
-    // Mover ambos servos sincronizadamente al mismo ángulo
-    void setAngleBoth(int angle) {
-        angle = constrain(angle, 0, 180);
-        currentAngle1 = angle;
-        currentAngle2 = angle;
+    void setSystemAngle(int angle) {
+        angle = constrain(angle, 0, 90); 
+
+        currentAngle1 = angle;          // Normal
+        currentAngle2 = 90 - angle;     // Invertido (Espejo)
+
         servo1.write(currentAngle1);
         servo2.write(currentAngle2);
-        Serial.print("✅ Ambos servos a: ");
-        Serial.print(angle);
+        
+        Serial.print("📐 Servos movidos a: S1=");
+        Serial.print(currentAngle1);
+        Serial.print("° / S2=");
+        Serial.print(currentAngle2);
         Serial.println("°");
     }
     
     void open() { 
-        setAngleBoth(180); 
-        Serial.println("🔓 TAPA ABIERTA");
+        setSystemAngle(90); 
+        Serial.println("🔓 TAPA ABIERTA (90°)");
     }
     
     void close() { 
-        setAngleBoth(0); 
-        Serial.println("🔒 TAPA CERRADA");
+        setSystemAngle(0);  
+        Serial.println("🔒 TAPA CERRADA (0°)");
     }
     
     void mid() { 
-        setAngleBoth(90); 
-        Serial.println("⏸️ TAPA MEDIA");
+        setSystemAngle(45); 
+        Serial.println(" TAPA MEDIA (45°)");
     }
     
     int getAngle1() const { return currentAngle1; }
     int getAngle2() const { return currentAngle2; }
+
+    void setAngleBoth(int angle) {
+        setSystemAngle(angle);
+    }
 };
 
 
@@ -329,7 +333,6 @@ public:
     if (client->connect(thingName.c_str())) {
         Serial.println("✅ AWS IoT conectado!");
         
-        // ⭐ ESPERAR antes de suscribirse
         delay(1000);
         
 
@@ -355,6 +358,10 @@ public:
         Serial.print("📡 Suscripción a Subscribe Topic: ");
         Serial.println(subTopicSubscribed ? "✅ EXITOSA" : "❌ FALLÓ");
         
+        client->subscribe(AWS_IOT_SHADOW_GET_ACCEPTED, 1); 
+
+        Serial.println("❓ Consultando estado anterior...");
+        client->publish(AWS_IOT_SHADOW_GET, "{}"); 
 
         if (!deltaSubscribed) {
             Serial.println("⚠️ Reintentando suscripción al Delta...");
@@ -366,7 +373,7 @@ public:
         return true;
     }
     
-    Serial.print("❌ Fallo, rc=");
+    Serial.print("Fallo, rc=");
     Serial.println(client->state());
     return false;
     }
@@ -390,9 +397,18 @@ public:
         reported["command"] = command;
         
         String status = "idle";
-        if (servo1Angle == 180 && servo2Angle == 180) status = "open";
-        else if (servo1Angle == 0 && servo2Angle == 0) status = "closed";
-        else if (servo1Angle == 90 && servo2Angle == 90) status = "mid";
+    
+   
+        if (servo1Angle >= 85) status = "open"; 
+        
+
+        else if (servo1Angle <= 5) status = "closed"; 
+        
+        else status = "mid";
+        
+        if (status == "idle" && command == "close") status = "closed";
+        if (status == "idle" && command == "open") status = "open";
+
         reported["status"] = status;
         
         char buffer[768];
@@ -416,7 +432,7 @@ public:
         doc["last_motion_time"] = lastMotionTime;
         doc["last_infrared_time"] = lastIRTime;
         doc["uptime"] = uptime;
-        
+
         char buffer[768];
         serializeJson(doc, buffer);
         
@@ -435,60 +451,99 @@ public:
     Serial.println("====================================");
     Serial.print("📨 Topic: ");
     Serial.println(topic);
-    
+
+    // Convertir payload a string
     char message[length + 1];
     for (unsigned int i = 0; i < length; i++) {
         message[i] = (char)payload[i];
     }
     message[length] = '\0';
-    
+
     Serial.print("📄 Payload: ");
     Serial.println(message);
-    
-    // Ignorar mensajes de la Rule
+
+    // 1. IGNORAR MENSAJES DE LA RULE (Evita bucles)
     if (strcmp(topic, AWS_IOT_SUBSCRIBE_TOPIC) == 0) {
-        StaticJsonDocument<512> testDoc;
-        if (deserializeJson(testDoc, message) == DeserializationError::Ok) {
-            if (testDoc.containsKey("timestamp")) {
-                Serial.println("⚠️ Mensaje de Rule ignorado");
-                Serial.println("====================================");
-                return;
-            }
-        }
+        Serial.println("⚠️ Mensaje de Rule ignorado (es mi propio eco)");
+        Serial.println("====================================");
+        return;
     }
-    
-    if (strcmp(topic, AWS_IOT_SHADOW_UPDATE_DELTA) == 0) {
-        Serial.println("🔄 ¡DELTA RECIBIDO! Procesando...");
+
+    // 2. RECUPERACIÓN DE ESTADO (GET ACCEPTED) 
+    if (strcmp(topic, AWS_IOT_SHADOW_GET_ACCEPTED) == 0) {
+        Serial.println("🔄 RESTAURANDO ESTADO (GET_ACCEPTED)...");
         
-        StaticJsonDocument<1024> doc;
+        StaticJsonDocument<2048> doc; 
         DeserializationError error = deserializeJson(doc, message);
-        
+
         if (error) {
-            Serial.print("❌ Error parseando JSON: ");
+            Serial.print("❌ Error JSON en GET: ");
             Serial.println(error.c_str());
             return;
         }
+
+        // Buscamos la configuración en este orden: 
+        // 1. 'desired' (si había una orden pendiente de la Lambda)
+        // 2. 'reported' (el último estado conocido)
         
         JsonObject state = doc["state"];
+        int targetAngle = -1; 
+        String targetCommand = "";
+
+        if (state["desired"].containsKey("servo1_angle")) {
+            targetAngle = state["desired"]["servo1_angle"];
+            if (state["desired"].containsKey("command")) {
+                targetCommand = state["desired"]["command"].as<String>();
+            }
+            Serial.println("💡 Encontrado estado DESEADO pendiente");
+        } 
+        else if (state["reported"].containsKey("servo1_angle")) {
+            targetAngle = state["reported"]["servo1_angle"];
+             if (state["reported"].containsKey("command")) {
+                targetCommand = state["reported"]["command"].as<String>();
+            }
+            Serial.println("💾 Encontrado estado REPORTADO previo");
+        }
+
+        // Ejecutar la restauración
+        if (targetAngle != -1) {
+            Serial.print("🔙 Restaurando servos a: ");
+            Serial.println(targetAngle);
+            // Usamos "set_angle" para forzar la posición sin lógica extra
+            pendingCommand->set("set_angle", targetAngle);
+        }
+    }
+
+    // ACTUALIZACIÓN EN TIEMPO REAL (DELTA)
+    else if (strcmp(topic, AWS_IOT_SHADOW_UPDATE_DELTA) == 0) {
+        Serial.println("⚡ ¡DELTA RECIBIDO! Procesando...");
+
+        StaticJsonDocument<1024> doc;
+        DeserializationError error = deserializeJson(doc, message);
+
+        if (error) {
+            Serial.print("❌ Error parseando JSON Delta: ");
+            Serial.println(error.c_str());
+            return;
+        }
+
+        JsonObject state = doc["state"];
         if (state.isNull()) return;
-        
+
         if (state.containsKey("command")) {
             String command = state["command"].as<String>();
             Serial.print("🎤 Comando detectado: ");
             Serial.println(command);
-            
+
             if (command == "idle") {
                 Serial.println("⏸️ Comando 'idle' ignorado - ya sincronizado");
-                Serial.println("====================================");
-                return;
             }
-            
-            if (command == "open") {
-                pendingCommand->set("open", 180);
+            else if (command == "open") {
+                pendingCommand->set("open", 90);
             } else if (command == "close") {
                 pendingCommand->set("close", 0);
             } else if (command == "mid") {
-                pendingCommand->set("mid", 90);
+                pendingCommand->set("mid", 45);
             } else if (command == "set_angle") {
                 int angle = 90;
                 if (state.containsKey("servo1_angle")) {
@@ -497,16 +552,15 @@ public:
                 pendingCommand->set("set_angle", angle);
             }
         }
-        else if (state.containsKey("servo1_angle") && !state.containsKey("command")) {
+        else if (state.containsKey("servo1_angle")) {
             int angle = state["servo1_angle"];
             pendingCommand->set("set_angle", angle);
         }
     }
-    
+
     Serial.println("====================================");
 }
 };
-
 AWSIoTManager* AWSIoTManager::instance = nullptr;
 
 class WiFiManager {
@@ -554,7 +608,6 @@ private:
     bool lastPIRState;
     bool lastIRState;
 
-    // 🔹 Variables para control de reportes por si hay loop ya sabemos donde es
     bool lastReportedPIR = false;
     bool lastReportedIR = false;
     int lastReportedServo1 = -1;
@@ -563,11 +616,13 @@ private:
 
 public:
     SmartTrashCan() {
+
         pirSensor = new PIRSensor(PIR_SENSOR_PIN);
         irSensor = new IRSensor(IR_SENSOR_PIN);
         servos = new DualServoController(SERVO1_PIN, SERVO2_PIN);
         awsManager = new AWSIoTManager(THINGNAME);
         command = new Command();
+        
         lastCommand = "idle";
         lastPublish = 0;
         lastPIRState = false;
@@ -588,7 +643,7 @@ public:
         delete command;
     }
 
-    void begin() {
+    void begin(const char* ssid, const char* pass) {
         Serial.println("====================================");
         Serial.println("🗑️ BASURERO INTELIGENTE - ESP32");
         Serial.println("====================================");
@@ -596,67 +651,41 @@ public:
         pirSensor->begin();
         irSensor->begin();
         servos->begin();
-
-        WiFiManager::connect(WIFI_SSID, WIFI_PASSWORD);
+        WiFiManager::connect(ssid, pass);
+        
         awsManager->begin();
         awsManager->setPendingCommand(command);
 
-        if (WiFiManager::isConnected()) {
-            if (awsManager->connect()) {
-                delay(2000);
-
-                awsManager->reportState(
-                    servos->getAngle1(),
-                    servos->getAngle2(),
-                    false,
-                    false,
-                    0,
-                    0,
-                    0,
-                    "idle"
-                );
-
-                Serial.println("✅ Sistema inicializado en estado 'idle'");
-            }
-        }
-
         Serial.println("====================================");
-        Serial.println("🚀 Sistema listo!");
+        Serial.println("🚀 Sistema listo - Esperando recuperación de estado...");
         Serial.println("====================================");
     }
 
     void update() {
-        // Reconexiones
-        if (!WiFiManager::isConnected()) WiFiManager::connect(WIFI_SSID, WIFI_PASSWORD);
-        if (!awsManager->isConnected()) awsManager->connect();
+        if (!awsManager->isConnected()) {
+             if (WiFiManager::isConnected()) awsManager->connect();
+        }
 
-        // Mantener conexión MQTT
         awsManager->loop();
 
-        // Procesar comando pendiente
         if (command->isPending()) {
             processCommand();
         }
 
-        // Guardar estados anteriores
         bool prevPIR = lastPIRState;
         bool prevIR = lastIRState;
 
-        // Actualizar sensores
         pirSensor->update();
         irSensor->update();
 
-        // Obtener estados actuales
         lastPIRState = pirSensor->isDetected();
         lastIRState = irSensor->isDetected();
 
-        //  Solo reportar Shadow si hubo cambio real de estado
-        if ((prevPIR != lastPIRState) || (prevIR != lastIRState) || (lastCommand != "idle")) {
+        if ((prevPIR != lastPIRState) || (prevIR != lastIRState) || (lastCommand != lastReportedCommand)) {
             reportState();
-            lastCommand = "idle"; // Reiniciar comando
+            
         }
 
-        //  Publicar telemetría cada publishInterval ms
         unsigned long now = millis();
         if (now - lastPublish >= publishInterval) {
             lastPublish = now;
@@ -673,10 +702,10 @@ private:
         int angle = command->getAngle();
 
         if (cmdType == "open") {
-            servos->open();
+            servos->open(); 
             lastCommand = "open";
         } else if (cmdType == "close") {
-            servos->close();
+            servos->close(); 
             lastCommand = "close";
         } else if (cmdType == "mid") {
             servos->mid();
@@ -688,9 +717,6 @@ private:
 
         command->clear();
 
-        // Dar tiempo a que el servo se mueva
-        delay(500);
-
         awsManager->reportState(
             servos->getAngle1(),
             servos->getAngle2(),
@@ -699,19 +725,18 @@ private:
             pirSensor->getLastDetectionTime(),
             irSensor->getLastDetectionTime(),
             millis() / 1000,
-            "idle"
+            lastCommand 
         );
 
-        Serial.println("✅ Comando completado y reportado como 'idle'");
+        Serial.print("✅ Comando completado y sincronizado: ");
+        Serial.println(lastCommand);
     }
 
     void reportState() {
-
         bool currentPIR = pirSensor->isDetected();
         bool currentIR  = irSensor->isDetected();
         int currentServo1 = servos->getAngle1();
         int currentServo2 = servos->getAngle2();
-
 
         if (currentPIR != lastReportedPIR || currentIR != lastReportedIR ||
             currentServo1 != lastReportedServo1 || currentServo2 != lastReportedServo2 ||
@@ -728,21 +753,18 @@ private:
                 lastCommand
             );
 
-            // Actualizar últimos reportes
             lastReportedPIR = currentPIR;
             lastReportedIR = currentIR;
             lastReportedServo1 = currentServo1;
             lastReportedServo2 = currentServo2;
             lastReportedCommand = lastCommand;
 
-            Serial.println("📡 Estado reportado a AWS (cambio detectado)");
-        }
-        else {
-            Serial.println("⏸️ Sin cambios, no se reporta");
+            Serial.println("📡 Estado reportado a AWS");
         }
     }
 
     void publishData() {
+
         awsManager->publishData(
             servos->getAngle1(),
             servos->getAngle2(),
@@ -755,15 +777,29 @@ private:
     }
 };
 
-
 SmartTrashCan* trashCan;
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
+
+    Serial.println("====================================");
+    Serial.println("⚙️ CONFIGURACIÓN INICIAL");
     
+    Serial.println("✍️ Escribe el nombre de la red WiFi:");
+    while (Serial.available() == 0) { delay(100); } 
+    wifi_ssid = Serial.readStringUntil('\n');
+    wifi_ssid.trim(); 
+    Serial.print("✅ SSID: "); Serial.println(wifi_ssid);
+
+    Serial.println("✍️ Escribe la contraseña:");
+    while (Serial.available() == 0) { delay(100); }
+    wifi_password = Serial.readStringUntil('\n');
+    wifi_password.trim();
+    Serial.println("✅ Password recibida");
+
     trashCan = new SmartTrashCan();
-    trashCan->begin();
+    trashCan->begin(wifi_ssid.c_str(), wifi_password.c_str());
 }
 
 void loop() {
